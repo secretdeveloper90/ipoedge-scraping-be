@@ -72,7 +72,7 @@ export const getListingDetails = async (req: Request, res: Response): Promise<vo
 
     const response: AxiosResponse = await apiClient.get(`${TRENDLYNE_BASE_URL}/listing-details/`);
 
-    if (response.data && response.data.head && response.data.head.status === 0) {
+    if (response.data && response.data.head && (response.data.head.status === 0 || response.data.head.status === "0")) {
       // Success response from Trendlyne
       res.json({
         success: true,
@@ -193,7 +193,7 @@ export const getScreenerData = async (req: Request, res: Response): Promise<void
       }
     });
 
-    if (response.data && response.data.head && response.data.head.status === 0) {
+    if (response.data && response.data.head && (response.data.head.status === 0 || response.data.head.status === "0")) {
       // Success response from Trendlyne
       res.json({
         success: true,
