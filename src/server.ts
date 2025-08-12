@@ -15,7 +15,11 @@ const PORT: number = parseInt(process.env.PORT || '5000', 10);
 app.use(helmet());
 app.use(morgan('combined'));
 app.use(cors({
-  origin: ['http://localhost:3000'],
+  origin: [
+    'http://localhost:3000',
+    'https://your-frontend-domain.vercel.app', // Replace with your actual frontend domain
+    /\.vercel\.app$/ // Allow all Vercel preview deployments
+  ],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -50,7 +54,13 @@ app.use('*', (req: Request, res: Response) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV}`);
-});
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV}`);
+  });
+}
+
+// Export for Vercel
+export default app;
