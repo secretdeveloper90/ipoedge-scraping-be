@@ -1,0 +1,249 @@
+import { Request, Response } from 'express';
+import axios, { AxiosInstance, AxiosResponse } from 'axios';
+
+const TRENDLYNE_BASE_URL: string = process.env.TRENDLYNE_BASE_URL || 'https://trendlyne.com/ipo/api';
+
+// Define interfaces for API responses
+interface TrendlyneResponse<T = any> {
+  success: boolean;
+  data: T;
+  head?: {
+    status: number;
+    statusDescription: string;
+  };
+}
+
+interface IPOCompanyData {
+  company_headers: {
+    company_name: string;
+    company_short_name: string;
+    ipo_id: number;
+    company_slug_name: string;
+    stock_page_url: string;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+interface IPOScreenerData {
+  table: {
+    row_data: Array<{
+      company_name: string;
+      ipo_id: number;
+      company_slug_name: string;
+      stock_page_url: string;
+      stock_code: string;
+      isin: string;
+      listing_date: string;
+      issue_size: number;
+      issue_price: number;
+      is_sme: boolean;
+      [key: string]: any;
+    }>;
+    totalCount: number;
+  };
+  [key: string]: any;
+}
+
+// Configure axios with default settings
+const apiClient: AxiosInstance = axios.create({
+  timeout: 30000, // 30 seconds timeout
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin'
+  }
+});
+
+// Get listing details (list of all IPOs) from Trendlyne API
+export const getListingDetails = async (req: Request, res: Response): Promise<void> => {
+  try {
+    console.log('Fetching IPO listing details from Trendlyne API');
+
+    const response: AxiosResponse = await apiClient.get(`${TRENDLYNE_BASE_URL}/listing-details/`);
+
+    if (response.data && response.data.head && response.data.head.status === 0) {
+      // Success response from Trendlyne
+      res.json({
+        success: true,
+        data: response.data.body,
+        metadata: {
+          fetchedAt: new Date().toISOString(),
+          source: 'trendlyne',
+          apiVersion: 'listing-details'
+        }
+      });
+    } else {
+      // API returned an error
+      res.status(404).json({
+        error: 'Listing data not found',
+        message: 'No IPO listing data available',
+        details: response.data.head || {}
+      });
+    }
+  } catch (error: any) {
+    console.error('Error fetching listing details:', error.message);
+    res.status(500).json({
+      error: 'Failed to fetch listing details',
+      message: 'An error occurred while fetching IPO listing data',
+      details: error.message
+    });
+  }
+};
+
+// Get company details by ID from Trendlyne API
+export const getCompanyDetails = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { companyId } = req.params;
+
+    if (!companyId) {
+      res.status(400).json({
+        error: 'Missing company ID',
+        message: 'Company ID is required'
+      });
+      return;
+    }
+
+    console.log(`Fetching IPO data for company ID: ${companyId}`);
+    
+    const response: AxiosResponse<IPOCompanyData> = await apiClient.get(`${TRENDLYNE_BASE_URL}/company-details/${companyId}/`, {
+      headers: {
+        'Referer': 'https://trendlyne.com/ipo/',
+        'Origin': 'https://trendlyne.com',
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+
+    if (response.data && typeof response.data === 'object') {
+      // Success response from Trendlyne
+      res.json({
+        success: true,
+        data: response.data,
+        metadata: {
+          companyId,
+          fetchedAt: new Date().toISOString(),
+          source: 'trendlyne'
+        }
+      });
+    } else {
+      // API returned unexpected data
+      res.status(404).json({
+        error: 'Company data not found',
+        message: `No IPO data found for company ID: ${companyId}`
+      });
+    }
+  } catch (error: any) {
+    console.error('Error fetching company details:', error.message);
+    
+    if (error.response?.status === 404) {
+      res.status(404).json({
+        error: 'Company not found',
+        message: `Company with ID ${req.params.companyId} not found`
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to fetch company details',
+        message: 'An error occurred while fetching company data',
+        details: error.message
+      });
+    }
+  }
+};
+
+// Get IPO screener data by year from Trendlyne API
+export const getScreenerData = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { year } = req.params;
+
+    if (!year) {
+      res.status(400).json({
+        error: 'Missing year parameter',
+        message: 'Year is required'
+      });
+      return;
+    }
+
+    // Validate year format
+    const yearNum = parseInt(year, 10);
+    if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2030) {
+      res.status(400).json({
+        error: 'Invalid year',
+        message: 'Year must be a valid number between 2000 and 2030'
+      });
+      return;
+    }
+
+    console.log(`Fetching IPO screener data for year: ${year}`);
+    
+    const response: AxiosResponse<IPOScreenerData> = await apiClient.get(`${TRENDLYNE_BASE_URL}/screener-v2/year/${year}/`, {
+      headers: {
+        'Referer': 'https://trendlyne.com/ipo/',
+        'Origin': 'https://trendlyne.com',
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+
+    if (response.data && response.data.head && response.data.head.status === 0) {
+      // Success response from Trendlyne
+      res.json({
+        success: true,
+        data: response.data.body || {},
+        metadata: {
+          year,
+          fetchedAt: new Date().toISOString(),
+          source: 'trendlyne',
+          totalCount: response.data.body?.table?.totalCount || 0,
+          apiVersion: 'screener-v2',
+          headInfo: response.data.head
+        }
+      });
+    } else {
+      // API returned an error
+      res.status(404).json({
+        error: 'Screener data not found',
+        message: `No IPO screener data found for year: ${year}`,
+        details: response.data.head || {}
+      });
+    }
+  } catch (error: any) {
+    console.error('Error fetching screener data:', error.message);
+    
+    if (error.response?.status === 404) {
+      res.status(404).json({
+        error: 'Screener data not found',
+        message: `No IPO screener data available for year ${req.params.year}`
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to fetch screener data',
+        message: 'An error occurred while fetching screener data',
+        details: error.message
+      });
+    }
+  }
+};
+
+// Health check endpoint
+export const healthCheck = (req: Request, res: Response): void => {
+  res.json({
+    status: 'OK',
+    message: 'IPO service is running',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      getListingDetails: '/api/ipos/listing-details',
+      getCompanyDetails: '/api/ipos/company/:companyId',
+      getScreenerData: '/api/ipos/screener/:year',
+      health: '/api/ipos/health'
+    }
+  });
+};
