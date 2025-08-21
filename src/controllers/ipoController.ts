@@ -257,7 +257,7 @@ export const checkAllotmentStatus = async (req: Request, res: Response): Promise
 
     if (registrar) {
       // Check specific registrar
-      const validRegistrars: RegistrarType[] = ['bigshare', 'kfintech', 'linkintime', 'skyline', 'cameo', 'mas', 'maashitla', 'beetal', 'purva'];
+      const validRegistrars: RegistrarType[] = ['bigshare', 'kfintech', 'linkintime', 'skyline', 'cameo', 'mas', 'maashitla', 'beetal', 'purva', 'mufg'];
 
       if (!validRegistrars.includes(registrar as RegistrarType)) {
         res.status(400).json({

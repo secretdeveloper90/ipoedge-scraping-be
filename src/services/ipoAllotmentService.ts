@@ -86,11 +86,23 @@ const registrarConfigs: Record<RegistrarType, RegistrarConfig> = {
     method: 'GET',
     endpoint: '/results.html',
     responseType: 'html'
+  },
+  mufg: {
+    name: 'MUFG Intime India Private Limited',
+    baseUrl: 'https://in.mpms.mufg.com',
+    method: 'POST',
+    endpoint: '/Initial_Offer/IPO.aspx/SearchOnPan',
+    requiresCompanyCode: true,
+    responseType: 'json'
   }
 };
 
 // Cache for BigShare company IDs to avoid repeated scraping
 const bigshareCompanyIdCache = new Map<string, { id: string | null; timestamp: number }>();
+
+// Cache for MUFG company IDs to avoid repeated scraping
+const mufgCompanyIdCache = new Map<string, { id: string | null; timestamp: number }>();
+
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const MAX_CACHE_SIZE = 1000; // Maximum number of entries to keep in cache
 
@@ -241,6 +253,115 @@ async function getBigshareCompanyId(ipoName: string): Promise<string | null> {
   return null;
 }
 
+// MUFG company ID lookup function
+async function getMufgCompanyId(ipoName: string): Promise<string | null> {
+  const cacheKey = ipoName.toLowerCase().trim();
+
+  // Check cache first
+  const cached = mufgCompanyIdCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
+    console.log(`Using cached MUFG company ID for ${ipoName}: ${cached.id}`);
+    return cached.id;
+  }
+
+  try {
+    console.log(`Fetching MUFG company list for: ${ipoName}`);
+    const companiesUrl = 'https://in.mpms.mufg.com/Initial_Offer/IPO.aspx/GetDetails';
+
+    const response = await apiClient.post(companiesUrl, {}, {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (response.data && response.data.d) {
+      // Decode HTML entities in the XML response
+      let xmlData = response.data.d;
+      // Handle both escaped and unescaped HTML entities
+      xmlData = xmlData.replace(/\\u003c/g, '<').replace(/\\u003e/g, '>');
+      xmlData = xmlData.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+      xmlData = xmlData.replace(/&amp;/g, '&');
+
+      console.log('Decoded XML data sample:', xmlData.substring(0, 500));
+
+      const $ = cheerio.load(xmlData, { xmlMode: true });
+
+      // Look for company in the XML response
+      const tables = $('Table');
+      let companyId: string | null = null;
+
+      console.log(`Searching for "${ipoName}" in ${tables.length} companies`);
+
+      for (let i = 0; i < tables.length; i++) {
+        const element = tables.eq(i);
+        const companyName = element.find('companyname').text();
+        const companyIdText = element.find('company_id').text();
+        const searchName = ipoName.toLowerCase().trim();
+        const companyNameLower = companyName.toLowerCase().trim();
+
+        console.log(`Checking company: "${companyName}" (ID: ${companyIdText})`);
+
+        // Skip empty entries
+        if (!companyName || !companyIdText) continue;
+
+        // Try different matching strategies similar to BigShare
+        const normalizedSearch = searchName.replace(/[^a-z0-9]/g, '');
+        const normalizedCompany = companyNameLower.replace(/[^a-z0-9]/g, '');
+
+        if (companyNameLower.includes(searchName) ||
+            searchName.includes(companyNameLower) ||
+            normalizedCompany.includes(normalizedSearch) ||
+            normalizedSearch.includes(normalizedCompany) ||
+            companyName.toLowerCase().indexOf(searchName) !== -1) {
+          companyId = companyIdText;
+          console.log(`Found MUFG company ID for "${ipoName}": ${companyId} (matched with "${companyName}")`);
+          break;
+        }
+      }
+
+      if (companyId) {
+        // Cache the successful result
+        mufgCompanyIdCache.set(cacheKey, { id: companyId, timestamp: Date.now() });
+        cleanupMufgCache();
+        return companyId;
+      }
+    }
+  } catch (error: any) {
+    console.error(`Error fetching MUFG company ID:`, error.message);
+  }
+
+  console.log(`No MUFG company ID found for IPO name: ${ipoName}`);
+
+  // Cache the result (even if null) to avoid repeated failed attempts
+  mufgCompanyIdCache.set(cacheKey, { id: null, timestamp: Date.now() });
+  cleanupMufgCache();
+  return null;
+}
+
+// Clean up MUFG cache
+function cleanupMufgCache(): void {
+  const now = Date.now();
+
+  // Remove expired entries
+  for (const [key, value] of mufgCompanyIdCache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION) {
+      mufgCompanyIdCache.delete(key);
+    }
+  }
+
+  // Enforce size limit by removing oldest entries
+  if (mufgCompanyIdCache.size > MAX_CACHE_SIZE) {
+    const entries = Array.from(mufgCompanyIdCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    const entriesToRemove = entries.slice(0, mufgCompanyIdCache.size - MAX_CACHE_SIZE);
+    for (const [key] of entriesToRemove) {
+      mufgCompanyIdCache.delete(key);
+    }
+  }
+}
+
 // Bigshare checker
 async function checkBigshare({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAllotmentResponse> {
   const config = registrarConfigs.bigshare;
@@ -294,11 +415,11 @@ async function checkBigshare({ panNo, ipoName }: IPOAllotmentRequest): Promise<I
         const allotedValue = data.ALLOTED || '';
 
         if (allotedValue.toLowerCase().includes('allot') && !allotedValue.toLowerCase().includes('non')) {
-          allotmentStatus = 'allotted';
+          allotmentStatus = 'Allotted';
         } else if (allotedValue.toLowerCase().includes('non-allot') || allotedValue.toLowerCase().includes('not allot')) {
-          allotmentStatus = 'not allotted';
+          allotmentStatus = 'Not Allotted';
         } else {
-          allotmentStatus = 'pending'; // Status unclear
+          allotmentStatus = 'Pending'; // Status unclear
         }
 
         allotmentDetails = {
@@ -311,7 +432,7 @@ async function checkBigshare({ panNo, ipoName }: IPOAllotmentRequest): Promise<I
         };
       } else {
         // No application data found
-        allotmentStatus = 'no record found';
+        allotmentStatus = 'No Record Found';
       }
     }
 
@@ -406,14 +527,146 @@ async function checkLinkIntime({ panNo, ipoName }: IPOAllotmentRequest): Promise
   }
 }
 
+// MUFG checker
+async function checkMufg({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAllotmentResponse> {
+  const config = registrarConfigs.mufg;
+
+  try {
+    // Get company ID using the lookup function (similar to BigShare)
+    let companyId = await getMufgCompanyId(ipoName);
+
+    // If no company ID found and ipoName is numeric, use it directly
+    if (!companyId && /^\d+$/.test(ipoName)) {
+      companyId = ipoName;
+      console.log(`Using provided numeric IPO name as company ID: ${companyId}`);
+    }
+
+    // If still no company ID found, return error
+    if (!companyId) {
+      return {
+        success: false,
+        registrar: 'mufg',
+        raw: null,
+        status: 'error',
+        error: `No company found for IPO name: ${ipoName}`
+      };
+    }
+
+    // Generate token (simplified version)
+    const tokenUrl = `${config.baseUrl}/Initial_Offer/IPO.aspx/generateToken`;
+    let token = '';
+
+    try {
+      const tokenResponse = await apiClient.post(tokenUrl, {}, {
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
+      token = tokenResponse.data.d || '';
+    } catch (error) {
+      console.log('Could not generate token, proceeding without it');
+    }
+
+    // Search for allotment status
+    const searchUrl = `${config.baseUrl}${config.endpoint}`;
+    const searchBody = {
+      clientid: companyId,
+      PAN: panNo,
+      IFSC: '',
+      CHKVAL: '1', // 1 for PAN search
+      token: token
+    };
+
+    const response = await apiClient.post(searchUrl, JSON.stringify(searchBody), {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    let parsed;
+    try {
+      parsed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+    } catch {
+      parsed = response.data;
+    }
+
+    // Parse MUFG response to determine allotment status
+    let allotmentStatus = 'unknown';
+    let allotmentDetails = null;
+
+    if (parsed && parsed.d) {
+      const $ = cheerio.load(parsed.d);
+
+      // Look for application data in Table elements
+      const applications = $('Table');
+
+      if (applications.length > 0) {
+        // Take the first application result
+        const firstApp = applications.eq(0);
+        const allotted = firstApp.find('ALLOT').text();
+        const sharesApplied = firstApp.find('SHARES').text();
+        const applicantName = firstApp.find('NAME1').text();
+        const applicationCategory = firstApp.find('PEMNDG').text();
+        const dpClientId = firstApp.find('DPCLITID').text();
+
+        // Determine allotment status
+        if (allotted && parseInt(allotted) > 0) {
+          allotmentStatus = 'Allotted';
+        } else if (allotted === '0' || allotted === '') {
+          allotmentStatus = 'Not Allotted';
+        } else {
+          allotmentStatus = 'Pending';
+        }
+
+        allotmentDetails = {
+          applicationNumber: dpClientId || applicationCategory,
+          applicantName: applicantName,
+          dpId: dpClientId,
+          sharesApplied: sharesApplied,
+          allotmentStatus: allotted === '0' ? 'Not Allotted' : `${allotted} shares allotted`,
+          status: allotmentStatus as 'allotted' | 'not allotted' | 'no record found'
+        };
+      } else {
+        // Check for error messages in Table1
+        const errorMessages = $('Table1');
+        if (errorMessages.length > 0) {
+          const errorMsg = errorMessages.find('Msg').text();
+          if (errorMsg) {
+            allotmentStatus = 'No Record Found';
+          }
+        } else {
+          allotmentStatus = 'No Record Found';
+        }
+      }
+    }
+
+    return {
+      success: true,
+      registrar: 'mufg',
+      status: allotmentStatus,
+      allotmentDetails: allotmentDetails || undefined,
+      raw: parsed,
+      details: companyId !== ipoName ? `Used company ID: ${companyId}` : undefined
+    };
+
+  } catch (error: any) {
+    return {
+      success: false,
+      registrar: 'mufg',
+      raw: null,
+      status: 'error',
+      error: error.message
+    };
+  }
+}
+
 // Generic HTML-based checker for other registrars
 async function checkHtmlRegistrar(
-  registrar: RegistrarType, 
+  registrar: RegistrarType,
   { panNo, ipoName }: IPOAllotmentRequest
 ): Promise<IPOAllotmentResponse> {
   const config = registrarConfigs[registrar];
   let url = `${config.baseUrl}${config.endpoint}`;
-  
+
   // For Maashitla, add query parameters
   if (registrar === 'maashitla') {
     url += `?company=${encodeURIComponent(ipoName)}&search=${encodeURIComponent(panNo)}`;
@@ -422,12 +675,12 @@ async function checkHtmlRegistrar(
   try {
     const response: AxiosResponse = await apiClient.get(url);
     const html = response.data;
-    
-    return { 
-      success: true, 
-      registrar, 
-      raw: html, 
-      status: 'parse_needed' 
+
+    return {
+      success: true,
+      registrar,
+      raw: html,
+      status: 'parse_needed'
     };
   } catch (error: any) {
     return {
@@ -450,7 +703,8 @@ const registrarCheckers: Record<RegistrarType, (req: IPOAllotmentRequest) => Pro
   mas: (req) => checkHtmlRegistrar('mas', req),
   maashitla: (req) => checkHtmlRegistrar('maashitla', req),
   beetal: (req) => checkHtmlRegistrar('beetal', req),
-  purva: (req) => checkHtmlRegistrar('purva', req)
+  purva: (req) => checkHtmlRegistrar('purva', req),
+  mufg: checkMufg
 };
 
 export class IPOAllotmentService {
@@ -528,6 +782,32 @@ export class IPOAllotmentService {
 
     return {
       size: bigshareCompanyIdCache.size,
+      entries
+    };
+  }
+
+  // Clear MUFG company ID cache
+  static clearMufgCache(): void {
+    mufgCompanyIdCache.clear();
+    console.log('MUFG company ID cache cleared');
+  }
+
+  // Clean up expired MUFG cache entries
+  static cleanupMufgCache(): void {
+    cleanupMufgCache();
+    console.log('MUFG company ID cache cleaned up');
+  }
+
+  // Get MUFG cache stats
+  static getMufgCache(): { size: number; entries: Array<{ ipoName: string; companyId: string | null; age: number }> } {
+    const entries = Array.from(mufgCompanyIdCache.entries()).map(([key, value]) => ({
+      ipoName: key,
+      companyId: value.id,
+      age: Date.now() - value.timestamp
+    }));
+
+    return {
+      size: mufgCompanyIdCache.size,
       entries
     };
   }

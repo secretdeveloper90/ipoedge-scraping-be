@@ -46,16 +46,17 @@ export interface ParsedAllotmentResponse {
   allotmentDetails?: AllotmentStatus;
 }
 
-export type RegistrarType = 
+export type RegistrarType =
   | 'bigshare'
-  | 'kfintech' 
+  | 'kfintech'
   | 'linkintime'
   | 'skyline'
   | 'cameo'
   | 'mas'
   | 'maashitla'
   | 'beetal'
-  | 'purva';
+  | 'purva'
+  | 'mufg';
 
 export interface RegistrarConfig {
   name: string;
