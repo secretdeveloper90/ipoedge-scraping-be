@@ -3,6 +3,8 @@ import {
   getListingDetails,
   getCompanyDetails,
   getScreenerData,
+  checkAllotmentStatus,
+  getSupportedRegistrars,
   healthCheck
 } from '../controllers/ipoController';
 
@@ -16,6 +18,12 @@ router.get('/company/:companyId', getCompanyDetails);
 
 // GET /api/ipos/screener/:year - Fetch IPO screener data for a specific year
 router.get('/screener/:year', getScreenerData);
+
+// POST /api/ipos/allotment-status - Check IPO allotment status
+router.post('/check-allotment', checkAllotmentStatus);
+
+// GET /api/ipos/registrars - Get list of supported registrars
+router.get('/registrars', getSupportedRegistrars);
 
 // GET /api/ipos/health - Health check for IPO service
 router.get('/health', healthCheck);

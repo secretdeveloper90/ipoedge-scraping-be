@@ -1,17 +1,11 @@
 import { Request, Response } from 'express';
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import { IPOAllotmentService } from '../services/ipoAllotmentService';
+import { IPOAllotmentRequest, RegistrarType } from '../types/ipoAllotment';
 
 const TRENDLYNE_BASE_URL: string = process.env.TRENDLYNE_BASE_URL || 'https://trendlyne.com/ipo/api';
 
 // Define interfaces for API responses
-interface TrendlyneResponse<T = any> {
-  success: boolean;
-  data: T;
-  head?: {
-    status: number;
-    statusDescription: string;
-  };
-}
 
 interface IPOCompanyData {
   company_headers: {
@@ -66,7 +60,7 @@ const apiClient: AxiosInstance = axios.create({
 });
 
 // Get listing details (list of all IPOs) from Trendlyne API
-export const getListingDetails = async (req: Request, res: Response): Promise<void> => {
+export const getListingDetails = async (_req: Request, res: Response): Promise<void> => {
   try {
     console.log('Fetching IPO listing details from Trendlyne API');
 
@@ -233,8 +227,111 @@ export const getScreenerData = async (req: Request, res: Response): Promise<void
   }
 };
 
+// Check IPO allotment status
+export const checkAllotmentStatus = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { panNo, ipoName, registrar }: IPOAllotmentRequest = req.body;
+
+    // Validate required fields
+    if (!panNo || !ipoName) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'panNo and ipoName are required'
+      });
+      return;
+    }
+
+    // Validate PAN format (basic validation)
+    const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+    if (!panRegex.test(panNo)) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid PAN format',
+        message: 'PAN should be in format: ABCDE1234F'
+      });
+      return;
+    }
+
+    console.log(`Checking IPO allotment status for PAN: ${panNo}, IPO: ${ipoName}, Registrar: ${registrar || 'all'}`);
+
+    if (registrar) {
+      // Check specific registrar
+      const validRegistrars: RegistrarType[] = ['bigshare', 'kfintech', 'linkintime', 'skyline', 'cameo', 'mas', 'maashitla', 'beetal', 'purva'];
+
+      if (!validRegistrars.includes(registrar as RegistrarType)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid registrar',
+          message: `Registrar must be one of: ${validRegistrars.join(', ')}`
+        });
+        return;
+      }
+
+      const result = await IPOAllotmentService.checkRegistrar(registrar as RegistrarType, { panNo, ipoName, registrar });
+
+      res.json({
+        success: true,
+        data: result,
+        metadata: {
+          panNo: panNo.substring(0, 3) + 'XXXXX' + panNo.substring(8), // Mask PAN for privacy
+          ipoName,
+          registrar,
+          checkedAt: new Date().toISOString()
+        }
+      });
+    } else {
+      // Check all registrars
+      const results = await IPOAllotmentService.checkAllRegistrars({ panNo, ipoName });
+
+      res.json({
+        success: true,
+        data: results,
+        metadata: {
+          panNo: panNo.substring(0, 3) + 'XXXXX' + panNo.substring(8), // Mask PAN for privacy
+          ipoName,
+          totalRegistrarsChecked: results.length,
+          checkedAt: new Date().toISOString()
+        }
+      });
+    }
+  } catch (error: any) {
+    console.error('Error checking IPO allotment status:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check allotment status',
+      message: 'An error occurred while checking IPO allotment status',
+      details: error.message
+    });
+  }
+};
+
+// Get supported registrars list
+export const getSupportedRegistrars = (_req: Request, res: Response): void => {
+  try {
+    const registrars = IPOAllotmentService.getSupportedRegistrars();
+
+    res.json({
+      success: true,
+      data: registrars,
+      metadata: {
+        totalRegistrars: registrars.length,
+        fetchedAt: new Date().toISOString()
+      }
+    });
+  } catch (error: any) {
+    console.error('Error fetching supported registrars:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch supported registrars',
+      message: 'An error occurred while fetching registrar information',
+      details: error.message
+    });
+  }
+};
+
 // Health check endpoint
-export const healthCheck = (req: Request, res: Response): void => {
+export const healthCheck = (_req: Request, res: Response): void => {
   res.json({
     status: 'OK',
     message: 'IPO service is running',
@@ -243,6 +340,8 @@ export const healthCheck = (req: Request, res: Response): void => {
       getListingDetails: '/api/ipos/listing-details',
       getCompanyDetails: '/api/ipos/company/:companyId',
       getScreenerData: '/api/ipos/screener/:year',
+      checkAllotmentStatus: '/api/ipos/allotment-status',
+      getSupportedRegistrars: '/api/ipos/registrars',
       health: '/api/ipos/health'
     }
   });
