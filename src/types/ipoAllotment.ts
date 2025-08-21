@@ -36,7 +36,13 @@ export interface AllotmentStatus {
   status: 'allotted' | 'not_allotted' | 'pending' | 'unknown';
 }
 
-export interface ParsedAllotmentResponse extends IPOAllotmentResponse {
+export interface ParsedAllotmentResponse {
+  success: boolean;
+  registrar: string;
+  raw: any;
+  status: string;
+  error?: string;
+  details?: string;
   allotmentDetails?: AllotmentStatus;
 }
 
