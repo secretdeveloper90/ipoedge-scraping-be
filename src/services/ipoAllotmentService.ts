@@ -54,9 +54,9 @@ const registrarConfigs: Record<RegistrarType, RegistrarConfig> = {
   },
   cameo: {
     name: 'Cameo Corporate Services',
-    baseUrl: 'https://www.cameoindia.com',
-    method: 'GET',
-    endpoint: '/iporesult.html',
+    baseUrl: 'https://ipo.cameoindia.com',
+    method: 'POST',
+    endpoint: '/',
     responseType: 'html'
   },
   mas: {
@@ -83,8 +83,8 @@ const registrarConfigs: Record<RegistrarType, RegistrarConfig> = {
   purva: {
     name: 'Purva Sharegistry',
     baseUrl: 'https://www.purvashare.com',
-    method: 'GET',
-    endpoint: '/results.html',
+    method: 'POST',
+    endpoint: '/investor-service/ipo-query',
     responseType: 'html'
   },
   mufg: {
@@ -102,6 +102,9 @@ const bigshareCompanyIdCache = new Map<string, { id: string | null; timestamp: n
 
 // Cache for MUFG company IDs to avoid repeated scraping
 const mufgCompanyIdCache = new Map<string, { id: string | null; timestamp: number }>();
+
+// Cache for Purva company IDs to avoid repeated scraping
+const purvaCompanyIdCache = new Map<string, { id: string | null; timestamp: number }>();
 
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const MAX_CACHE_SIZE = 1000; // Maximum number of entries to keep in cache
@@ -358,6 +361,82 @@ function cleanupMufgCache(): void {
     const entriesToRemove = entries.slice(0, mufgCompanyIdCache.size - MAX_CACHE_SIZE);
     for (const [key] of entriesToRemove) {
       mufgCompanyIdCache.delete(key);
+    }
+  }
+}
+
+// Purva company ID lookup function
+async function getPurvaCompanyId(ipoName: string): Promise<string | null> {
+  const cacheKey = ipoName.toLowerCase().trim();
+
+  // Check cache first
+  const cached = purvaCompanyIdCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
+    console.log(`Using cached Purva company ID for ${ipoName}: ${cached.id}`);
+    return cached.id;
+  }
+
+  try {
+    console.log(`Fetching Purva company list for: ${ipoName}`);
+    const url = 'https://www.purvashare.com/investor-service/ipo-query';
+
+    const response = await apiClient.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    const $ = cheerio.load(response.data);
+
+    // Look for company dropdown options
+    const companyOptions = $('select[name="company_id"] option');
+
+    for (let i = 0; i < companyOptions.length; i++) {
+      const option = companyOptions.eq(i);
+      const optionText = option.text().trim();
+      const optionValue = option.attr('value');
+
+      if (optionValue && optionText.toLowerCase().includes(ipoName.toLowerCase())) {
+        console.log(`Found Purva company ID for ${ipoName}: ${optionValue} (${optionText})`);
+
+        // Cache the result
+        purvaCompanyIdCache.set(cacheKey, { id: optionValue, timestamp: Date.now() });
+        cleanupPurvaCache(); // Clean up cache after adding new entry
+        return optionValue;
+      }
+    }
+
+  } catch (error) {
+    console.error(`Error fetching Purva company list: ${error}`);
+  }
+
+  console.log(`No Purva company ID found for IPO name: ${ipoName}`);
+
+  // Cache the result (even if null) to avoid repeated failed attempts
+  purvaCompanyIdCache.set(cacheKey, { id: null, timestamp: Date.now() });
+  cleanupPurvaCache(); // Clean up cache after adding new entry
+  return null;
+}
+
+// Cleanup function for Purva cache
+function cleanupPurvaCache(): void {
+  const now = Date.now();
+
+  // Remove expired entries
+  for (const [key, value] of purvaCompanyIdCache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION) {
+      purvaCompanyIdCache.delete(key);
+    }
+  }
+
+  // Enforce size limit by removing oldest entries
+  if (purvaCompanyIdCache.size > MAX_CACHE_SIZE) {
+    const entries = Array.from(purvaCompanyIdCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    const entriesToRemove = entries.slice(0, purvaCompanyIdCache.size - MAX_CACHE_SIZE);
+    for (const [key] of entriesToRemove) {
+      purvaCompanyIdCache.delete(key);
     }
   }
 }
@@ -659,6 +738,163 @@ async function checkMufg({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAl
   }
 }
 
+// Purva checker
+async function checkPurva({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAllotmentResponse> {
+  const config = registrarConfigs.purva;
+
+  try {
+    // Purva Sharegistry IPO allotment check URL
+    const url = `${config.baseUrl}${config.endpoint}`;
+
+    // First, get the page to extract CSRF token
+    const initialResponse = await apiClient.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
+      }
+    });
+
+    // Extract CSRF token from the initial page
+    const $ = cheerio.load(initialResponse.data);
+    const csrfToken = $('input[name="csrfmiddlewaretoken"]').val() as string;
+
+    if (!csrfToken) {
+      return {
+        success: false,
+        registrar: 'purva',
+        raw: null,
+        status: 'error',
+        error: 'Could not extract CSRF token from Purva website'
+      };
+    }
+
+    // Determine company_id - if ipoName is numeric, use it directly, otherwise try to find it
+    let companyId = ipoName;
+    if (!/^\d+$/.test(ipoName)) {
+      // Try to get company ID using the lookup function
+      const scrapedCompanyId = await getPurvaCompanyId(ipoName);
+      if (scrapedCompanyId) {
+        companyId = scrapedCompanyId;
+      } else {
+        // Fallback to a default company ID if lookup fails
+        companyId = '78'; // Default fallback
+      }
+    }
+
+    // Create form data for Purva with proper structure
+    const formData = new URLSearchParams();
+    formData.append('csrfmiddlewaretoken', csrfToken);
+    formData.append('company_id', companyId);
+    formData.append('applicationNumber', ''); // Empty as per your example
+    formData.append('panNumber', panNo);
+    formData.append('submit', 'Search');
+
+    const response = await apiClient.post(url, formData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': url,
+        'Cookie': initialResponse.headers['set-cookie']?.join('; ') || ''
+      }
+    });
+
+    const html = response.data;
+
+
+
+    // Parse Purva response using the correct logic based on table structure
+    // Purva always returns a table, but the number of rows indicates the status:
+    // - 1 row (header only) = No Record Found
+    // - 2+ rows (header + data) = Record found, check allotment status
+
+    const $response = cheerio.load(html);
+    const table = $response('table').first();
+
+    if (table.length === 0) {
+      // No table found at all - this shouldn't happen with Purva
+      return {
+        success: true,
+        registrar: 'purva',
+        raw: html,
+        status: 'No Record Found'
+      };
+    }
+
+    const rows = table.find('tr');
+    const rowCount = rows.length;
+
+    console.log(`Purva table analysis: ${rowCount} rows found`);
+
+    if (rowCount <= 1) {
+      // Only header row present = No Record Found
+      return {
+        success: true,
+        registrar: 'purva',
+        raw: html,
+        status: 'No Record Found'
+      };
+    }
+
+    // There are data rows present, check for allotment status
+    // Look at the data rows (skip header row)
+    const dataRows = rows.slice(1);
+
+    let hasAllottedShares = false;
+    let totalAllottedShares = 0;
+
+    dataRows.each((index, row) => {
+      const $row = $response(row);
+      const cells = $row.find('td');
+
+      // Look for shares allotted column (usually the 6th column based on header structure)
+      // Header: Name | Application Number | Pan No | DPID - Client Id | Shares Applied | Shares Allotted | Refund Amount
+      if (cells.length >= 6) {
+        const sharesAllottedText = $response(cells[5]).text().trim(); // 6th column (0-indexed)
+        const sharesAllotted = parseInt(sharesAllottedText) || 0;
+
+        console.log(`Row ${index + 1}: Shares Allotted = "${sharesAllottedText}" (parsed: ${sharesAllotted})`);
+
+        if (sharesAllotted > 0) {
+          hasAllottedShares = true;
+          totalAllottedShares += sharesAllotted;
+        }
+      }
+    });
+
+    if (hasAllottedShares && totalAllottedShares > 0) {
+      return {
+        success: true,
+        registrar: 'purva',
+        raw: html,
+        status: 'Allotted'
+      };
+    } else {
+      // Data rows exist but no shares allotted
+      return {
+        success: true,
+        registrar: 'purva',
+        raw: html,
+        status: 'Not Allotted'
+      };
+    }
+
+  } catch (error: any) {
+    return {
+      success: false,
+      registrar: 'purva',
+      raw: null,
+      status: 'error',
+      error: error.message
+    };
+  }
+}
+
+
+
 // Generic HTML-based checker for other registrars
 async function checkHtmlRegistrar(
   registrar: RegistrarType,
@@ -699,11 +935,11 @@ const registrarCheckers: Record<RegistrarType, (req: IPOAllotmentRequest) => Pro
   kfintech: checkKfintech,
   linkintime: checkLinkIntime,
   skyline: (req) => checkHtmlRegistrar('skyline', req),
-  cameo: (req) => checkHtmlRegistrar('cameo', req),
+  cameo: (req) => checkHtmlRegistrar('cameo', req), // Back to generic HTML checker for now
   mas: (req) => checkHtmlRegistrar('mas', req),
   maashitla: (req) => checkHtmlRegistrar('maashitla', req),
   beetal: (req) => checkHtmlRegistrar('beetal', req),
-  purva: (req) => checkHtmlRegistrar('purva', req),
+  purva: checkPurva,
   mufg: checkMufg
 };
 
@@ -808,6 +1044,32 @@ export class IPOAllotmentService {
 
     return {
       size: mufgCompanyIdCache.size,
+      entries
+    };
+  }
+
+  // Clear Purva company ID cache
+  static clearPurvaCache(): void {
+    purvaCompanyIdCache.clear();
+    console.log('Purva company ID cache cleared');
+  }
+
+  // Clean up expired Purva cache entries
+  static cleanupPurvaCache(): void {
+    cleanupPurvaCache();
+    console.log('Purva company ID cache cleaned up');
+  }
+
+  // Get Purva cache stats
+  static getPurvaCache(): { size: number; entries: Array<{ ipoName: string; companyId: string | null; age: number }> } {
+    const entries = Array.from(purvaCompanyIdCache.entries()).map(([key, value]) => ({
+      ipoName: key,
+      companyId: value.id,
+      age: Date.now() - value.timestamp
+    }));
+
+    return {
+      size: purvaCompanyIdCache.size,
       entries
     };
   }
