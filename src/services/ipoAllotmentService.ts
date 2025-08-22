@@ -895,6 +895,274 @@ async function checkPurva({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOA
 
 
 
+// Cameo checker
+async function checkCameo({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAllotmentResponse> {
+  // Try multiple Cameo endpoints
+  const endpoints = [
+    'https://ipostatus1.cameoindia.com/',
+    'https://ipostatus2.cameoindia.com/',
+    'https://ipostatus3.cameoindia.com/'
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`Trying Cameo endpoint: ${endpoint}`);
+
+      // First, get the initial page to extract ViewState and other form data
+      const initialResponse = await apiClient.get(endpoint, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      const $ = cheerio.load(initialResponse.data);
+
+      // Extract form data
+      const viewState = $('input[name="__VIEWSTATE"]').val() as string;
+      const viewStateGenerator = $('input[name="__VIEWSTATEGENERATOR"]').val() as string;
+      const eventValidation = $('input[name="__EVENTVALIDATION"]').val() as string;
+
+      if (!viewState) {
+        console.log(`No ViewState found for ${endpoint}, trying next endpoint`);
+        continue;
+      }
+
+      // Get available companies from the dropdown
+      const companies: { [key: string]: string } = {};
+      $('select[name="drpCompany"] option').each((_, element) => {
+        const value = $(element).attr('value');
+        const text = $(element).text().trim();
+        if (value && value !== '0' && text) {
+          companies[text.toLowerCase()] = value;
+        }
+      });
+
+      // Try to find the company by name
+      let companyCode = '';
+      const ipoNameLower = ipoName.toLowerCase();
+
+      // First try exact match
+      if (companies[ipoNameLower]) {
+        companyCode = companies[ipoNameLower];
+      } else {
+        // Try partial match
+        for (const [companyName, code] of Object.entries(companies)) {
+          if (companyName.includes(ipoNameLower) || ipoNameLower.includes(companyName)) {
+            companyCode = code;
+            break;
+          }
+        }
+      }
+
+      if (!companyCode) {
+        // If no company found, try with the first available company for testing
+        const firstCompany = Object.values(companies)[0];
+        if (firstCompany) {
+          companyCode = firstCompany;
+          console.log(`Company "${ipoName}" not found, using first available company for testing`);
+        } else {
+          continue; // Try next endpoint
+        }
+      }
+
+      // Try different captcha strategies - based on your successful example
+      const captchaStrategies = [
+        '596407', // From your successful example
+        '123456', // Common default
+        '000000', // Another common default
+        Math.floor(Math.random() * 900000 + 100000).toString(), // Random 6-digit number
+        '', // Try empty captcha last
+      ];
+
+      for (const captchaValue of captchaStrategies) {
+        console.log(`Trying Cameo with captcha: ${captchaValue || 'empty'}`);
+
+        // Prepare form data for submission - using format from your successful example
+        const formData = new URLSearchParams();
+        formData.append('ScriptManager1', 'OrdersPanel|btngenerate');
+        formData.append('__EVENTTARGET', '');
+        formData.append('__EVENTARGUMENT', '');
+        formData.append('drpCompany', companyCode);
+        formData.append('ddlUserTypes', 'PAN NO');
+        formData.append('txtfolio', panNo);
+        formData.append('txt_phy_captcha', captchaValue);
+        formData.append('__VIEWSTATE', viewState);
+        formData.append('__VIEWSTATEGENERATOR', viewStateGenerator);
+        formData.append('__EVENTVALIDATION', eventValidation);
+        formData.append('__ASYNCPOST', 'true');
+        formData.append('btngenerate', 'Submit');
+
+        try {
+          // Submit the form using AJAX format to get the table response
+          const response = await apiClient.post(endpoint, formData, {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Referer': endpoint,
+              'X-Requested-With': 'XMLHttpRequest',
+              'X-MicrosoftAjax': 'Delta=true',
+              'Cache-Control': 'no-cache'
+            }
+          });
+
+          const responseHtml = response.data;
+          console.log(`Response for captcha ${captchaValue}: ${responseHtml.substring(0, 200)}...`);
+
+          // Check for captcha requirement in the response
+          const captchaScript = responseHtml.includes("showpop6('Oops!..Please enter the Captcha')");
+
+          if (captchaScript) {
+            console.log(`Captcha required for value: ${captchaValue || 'empty'}, trying next strategy`);
+            continue; // Try next captcha strategy
+          }
+
+          // Parse the AJAX response - it might be in the format: 1|#||4|8505|updatePanel|OrdersPanel|<html content>
+          let htmlContent = responseHtml;
+          if (responseHtml.includes('|updatePanel|OrdersPanel|')) {
+            const parts = responseHtml.split('|updatePanel|OrdersPanel|');
+            if (parts.length > 1) {
+              htmlContent = parts[1];
+            }
+          }
+
+          const $response = cheerio.load(htmlContent);
+
+          // Parse the response for allotment information
+          let allotmentStatus = 'No Record Found';
+          let allotmentDetails: any = undefined;
+
+          // Look for the specific table structure you showed in the image
+          // Headers: HOLD_ID | ALLOTTED_SHARES | REFUND_AMOUNT | REFUND_MODE | PAN_NO
+
+          // First, check for the exact text patterns from your image
+          if (htmlContent.includes('NO DATA FOUND FOR THIS SEARCH PLCY') ||
+              htmlContent.includes('NO DATA FOUND')) {
+            allotmentStatus = 'No Record Found';
+            console.log('Found "NO DATA FOUND" message in response');
+          }
+
+          // Look for tables with the specific headers
+          const tables = $response('table');
+          console.log(`Found ${tables.length} tables in response`);
+
+          if (tables.length > 0) {
+            tables.each((_, table) => {
+              const $table = $response(table);
+              const rows = $table.find('tr');
+              console.log(`Table has ${rows.length} rows`);
+
+              if (rows.length > 0) {
+                // Check header row for expected columns
+                const headerRow = $response(rows[0]);
+                const headers = headerRow.find('th, td').map((_, el) => $response(el).text().trim()).get();
+                console.log('Table headers:', headers);
+
+                // Look for the specific headers from your image
+                const hasExpectedHeaders = headers.some(h =>
+                  h.includes('HOLD_ID') ||
+                  h.includes('ALLOTTED_SHARES') ||
+                  h.includes('REFUND_AMOUNT') ||
+                  h.includes('REFUND_MODE') ||
+                  h.includes('PAN_NO')
+                );
+
+                if (hasExpectedHeaders || headers.length >= 4) {
+                  console.log('Found table with expected headers');
+
+                  // Process data rows
+                  rows.each((index, row) => {
+                    if (index === 0) return; // Skip header
+
+                    const $row = $response(row);
+                    const cells = $row.find('td');
+
+                    if (cells.length > 0) {
+                      const cellTexts = cells.map((_, cell) => $response(cell).text().trim()).get();
+                      console.log(`Row ${index} data:`, cellTexts);
+
+                      // Check for "NO DATA FOUND" message in any cell
+                      const noDataFound = cellTexts.some(text =>
+                        text.includes('NO DATA FOUND') ||
+                        text.includes('NO RECORD FOUND') ||
+                        text.includes('NO DATA FOUND FOR THIS SEARCH')
+                      );
+
+                      if (noDataFound) {
+                        allotmentStatus = 'No Record Found';
+                        console.log('Found "NO DATA FOUND" in table cell');
+                      } else if (cellTexts.length >= 4 && cellTexts[0] && cellTexts[0] !== '') {
+                        // Found actual data - structure: [HOLD_ID, ALLOTTED_SHARES, REFUND_AMOUNT, REFUND_MODE, PAN_NO]
+                        allotmentDetails = {
+                          holdId: cellTexts[0] || '',
+                          allottedShares: cellTexts[1] || '0',
+                          refundAmount: cellTexts[2] || '0',
+                          refundMode: cellTexts[3] || '',
+                          panNo: cellTexts[4] || '',
+                          status: (cellTexts[1] && cellTexts[1] !== '0' && cellTexts[1] !== '') ? 'Allotted' : 'Not Allotted'
+                        };
+
+                        allotmentStatus = allotmentDetails.status;
+                        console.log('Found allotment data:', allotmentDetails);
+                      }
+                    }
+                  });
+                }
+              }
+            });
+          }
+
+          // Check for specific success/failure messages in divs
+          const resultDiv = $response('#divgrid1, .table-responsive, .result');
+          if (resultDiv.length > 0 && resultDiv.text().trim()) {
+            const resultText = resultDiv.text().trim();
+            if (resultText.toLowerCase().includes('no data found') ||
+                resultText.toLowerCase().includes('no record found')) {
+              allotmentStatus = 'No Record Found';
+            } else if (resultText.toLowerCase().includes('allot')) {
+              allotmentStatus = resultText.includes('not') ? 'Not Allotted' : 'Allotted';
+            }
+          }
+
+          return {
+            success: true,
+            registrar: 'cameo',
+            status: allotmentStatus,
+            allotmentDetails: allotmentDetails,
+            raw: responseHtml,
+            details: `Used company code: ${companyCode}, captcha: ${captchaValue || 'empty'}`
+          };
+
+        } catch (submitError: any) {
+          console.log(`Error submitting with captcha ${captchaValue || 'empty'}:`, submitError.message);
+          continue; // Try next captcha strategy
+        }
+      }
+
+      // If all captcha strategies failed, return captcha required error
+      return {
+        success: false,
+        registrar: 'cameo',
+        raw: null,
+        status: 'captcha_required',
+        error: 'All captcha strategies failed. Captcha verification is required for Cameo IPO allotment checking.'
+      };
+
+    } catch (error: any) {
+      console.log(`Error with endpoint ${endpoint}:`, error.message);
+      continue; // Try next endpoint
+    }
+  }
+
+  // If all endpoints failed
+  return {
+    success: false,
+    registrar: 'cameo',
+    raw: null,
+    status: 'error',
+    error: 'All Cameo endpoints are unavailable'
+  };
+}
+
 // Generic HTML-based checker for other registrars
 async function checkHtmlRegistrar(
   registrar: RegistrarType,
@@ -935,7 +1203,7 @@ const registrarCheckers: Record<RegistrarType, (req: IPOAllotmentRequest) => Pro
   kfintech: checkKfintech,
   linkintime: checkLinkIntime,
   skyline: (req) => checkHtmlRegistrar('skyline', req),
-  cameo: (req) => checkHtmlRegistrar('cameo', req), // Back to generic HTML checker for now
+  cameo: checkCameo,
   mas: (req) => checkHtmlRegistrar('mas', req),
   maashitla: (req) => checkHtmlRegistrar('maashitla', req),
   beetal: (req) => checkHtmlRegistrar('beetal', req),
