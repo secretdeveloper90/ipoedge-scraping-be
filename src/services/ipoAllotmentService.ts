@@ -50,7 +50,8 @@ const registrarConfigs: Record<RegistrarType, RegistrarConfig> = {
     name: 'Skyline Financial Services',
     baseUrl: 'https://www.skylinerta.com',
     method: 'GET',
-    endpoint: '/ipo.php',
+    endpoint: '/display_application.php',
+    requiresCompanyCode: true,
     responseType: 'html'
   },
   cameo: {
@@ -106,6 +107,9 @@ const mufgCompanyIdCache = new Map<string, { id: string | null; timestamp: numbe
 
 // Cache for Purva company IDs to avoid repeated scraping
 const purvaCompanyIdCache = new Map<string, { id: string | null; timestamp: number }>();
+
+// Cache for Skyline company IDs to avoid repeated scraping
+const skylineCompanyIdCache = new Map<string, { id: string | null; timestamp: number }>();
 
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const MAX_CACHE_SIZE = 1000; // Maximum number of entries to keep in cache
@@ -438,6 +442,99 @@ function cleanupPurvaCache(): void {
     const entriesToRemove = entries.slice(0, purvaCompanyIdCache.size - MAX_CACHE_SIZE);
     for (const [key] of entriesToRemove) {
       purvaCompanyIdCache.delete(key);
+    }
+  }
+}
+
+// Skyline company ID lookup function
+async function getSkylineCompanyId(ipoName: string): Promise<string | null> {
+  const cacheKey = ipoName.toLowerCase().trim();
+
+  // Check cache first
+  const cached = skylineCompanyIdCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
+    console.log(`Using cached Skyline company ID for ${ipoName}: ${cached.id}`);
+    return cached.id;
+  }
+
+  try {
+    console.log(`Fetching Skyline company list for: ${ipoName}`);
+    const url = 'https://www.skylinerta.com/ipo.php';
+
+    const response = await apiClient.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    const $ = cheerio.load(response.data);
+
+    // Look for company dropdown options - based on the HTML structure seen
+    const companyOptions = $('select option');
+
+    console.log(`Found ${companyOptions.length} total options in Skyline dropdown`);
+
+    for (let i = 0; i < companyOptions.length; i++) {
+      const option = companyOptions.eq(i);
+      const optionText = option.text().trim();
+      const optionValue = option.attr('value');
+
+      // Skip empty values or default options
+      if (!optionValue || optionValue === '' || optionText.includes('Select Company')) {
+        continue;
+      }
+
+      console.log(`Checking Skyline option: "${optionText}" (value: ${optionValue})`);
+
+      const searchName = ipoName.toLowerCase().trim();
+      const companyNameLower = optionText.toLowerCase().trim();
+
+      // Try different matching strategies
+      if (companyNameLower.includes(searchName) ||
+          searchName.includes(companyNameLower) ||
+          companyNameLower.replace(/\s+/g, '').includes(searchName.replace(/\s+/g, '')) ||
+          searchName.replace(/\s+/g, '').includes(companyNameLower.replace(/\s+/g, ''))) {
+
+        console.log(`Found Skyline company ID for ${ipoName}: ${optionValue} (${optionText})`);
+
+        // Cache the result
+        skylineCompanyIdCache.set(cacheKey, { id: optionValue, timestamp: Date.now() });
+        cleanupSkylineCache();
+        return optionValue;
+      }
+    }
+
+  } catch (error) {
+    console.error(`Error fetching Skyline company list: ${error}`);
+  }
+
+  console.log(`No Skyline company ID found for IPO name: ${ipoName}`);
+
+  // Cache the result (even if null) to avoid repeated failed attempts
+  skylineCompanyIdCache.set(cacheKey, { id: null, timestamp: Date.now() });
+  cleanupSkylineCache();
+  return null;
+}
+
+// Cleanup function for Skyline cache
+function cleanupSkylineCache(): void {
+  const now = Date.now();
+
+  // Remove expired entries
+  for (const [key, value] of skylineCompanyIdCache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION) {
+      skylineCompanyIdCache.delete(key);
+    }
+  }
+
+  // Enforce size limit by removing oldest entries
+  if (skylineCompanyIdCache.size > MAX_CACHE_SIZE) {
+    const entries = Array.from(skylineCompanyIdCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    const entriesToRemove = entries.slice(0, skylineCompanyIdCache.size - MAX_CACHE_SIZE);
+    for (const [key] of entriesToRemove) {
+      skylineCompanyIdCache.delete(key);
     }
   }
 }
@@ -1322,6 +1419,275 @@ async function checkCameo({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOA
   };
 }
 
+// Skyline checker
+async function checkSkyline({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAllotmentResponse> {
+  try {
+    console.log(`Checking Skyline IPO allotment for PAN: ${panNo}, IPO: ${ipoName}`);
+
+    // Get company ID using the lookup function
+    let companyId = await getSkylineCompanyId(ipoName);
+
+    // If no company ID found and ipoName looks like a company name, try direct search
+    if (!companyId) {
+      return {
+        success: false,
+        registrar: 'skyline',
+        raw: null,
+        status: 'error',
+        error: `No company found for IPO name: ${ipoName}. Available companies can be found on https://www.skylinerta.com/ipo.php`
+      };
+    }
+
+    // Based on the website analysis, Skyline redirects to display_application.php with the company parameter
+    const searchUrl = `https://www.skylinerta.com/display_application.php?app=${companyId}`;
+
+    console.log(`Fetching Skyline application page: ${searchUrl}`);
+
+    const response = await apiClient.get(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://www.skylinerta.com/ipo.php'
+      }
+    });
+
+    const html = response.data;
+    const $ = cheerio.load(html);
+
+    // Parse the response to determine allotment status
+    let allotmentStatus = 'No Record Found';
+    let allotmentDetails: any = undefined;
+
+    // Look for forms or input fields where PAN can be entered
+    const panInputs = $('input[type="text"], input[name*="pan"], input[id*="pan"]');
+
+    if (panInputs.length > 0) {
+      // If there are PAN input fields, we need to submit a form
+      // This suggests the page requires form submission to check status
+
+      // Look for the form that contains PAN input
+      const form = panInputs.first().closest('form');
+
+      if (form.length > 0) {
+        const formAction = form.attr('action') || '';
+        const formMethod = (form.attr('method') || 'GET').toUpperCase();
+
+        // Prepare form data
+        const formData = new URLSearchParams();
+
+        // Add all form inputs
+        form.find('input, select').each((_, element) => {
+          const $el = $(element);
+          const name = $el.attr('name');
+          const type = $el.attr('type');
+          const value = $el.attr('value') || '';
+
+          if (name) {
+            if (type === 'text' && (name.toLowerCase().includes('pan') || $el.attr('placeholder')?.toLowerCase().includes('pan'))) {
+              // This is likely the PAN input field
+              formData.append(name, panNo);
+            } else if (type === 'hidden' || type === 'submit' || $el.is('select')) {
+              formData.append(name, value);
+            }
+          }
+        });
+
+        // Submit the form
+        const submitUrl = formAction.startsWith('http') ? formAction : `https://www.skylinerta.com/${formAction}`;
+
+        let submitResponse;
+        if (formMethod === 'POST') {
+          submitResponse = await apiClient.post(submitUrl, formData, {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Referer': searchUrl
+            }
+          });
+        } else {
+          const queryString = formData.toString();
+          const getUrl = `${submitUrl}${submitUrl.includes('?') ? '&' : '?'}${queryString}`;
+          submitResponse = await apiClient.get(getUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Referer': searchUrl
+            }
+          });
+        }
+
+        const resultHtml = submitResponse.data;
+        const $result = cheerio.load(resultHtml);
+
+        // Parse the result for allotment information
+        const bodyText = $result('body').text().toLowerCase();
+        const fullHtml = resultHtml.toLowerCase();
+
+        console.log('Skyline response analysis:');
+        console.log('Body text sample:', bodyText.substring(0, 500));
+
+        // First check for explicit "no record found" or similar messages
+        if (bodyText.includes('no record found') ||
+            bodyText.includes('no data found') ||
+            bodyText.includes('record not found') ||
+            bodyText.includes('no application found') ||
+            bodyText.includes('application not found') ||
+            fullHtml.includes('no record') ||
+            fullHtml.includes('not found')) {
+          allotmentStatus = 'No Record Found';
+          console.log('Found "No Record Found" indicators in response');
+        }
+        // Check for error messages or empty results
+        else if (bodyText.includes('error') ||
+                 bodyText.includes('invalid') ||
+                 bodyText.includes('please try again') ||
+                 bodyText.includes('no data available')) {
+          allotmentStatus = 'No Record Found';
+          console.log('Found error indicators in response');
+        }
+        // Look for actual allotment data in tables
+        else {
+          const tables = $result('table');
+          let foundActualData = false;
+
+          if (tables.length > 0) {
+            tables.each((_, table) => {
+              const $table = $result(table);
+              const rows = $table.find('tr');
+
+              // Check if table has meaningful data (more than just headers)
+              if (rows.length > 1) {
+                rows.each((index, row) => {
+                  if (index === 0) return; // Skip header row
+
+                  const $row = $result(row);
+                  const cells = $row.find('td');
+
+                  if (cells.length > 0) {
+                    const cellTexts = cells.map((_, cell) => $result(cell).text().trim()).get();
+                    const rowText = cellTexts.join(' ').toLowerCase();
+
+                    console.log(`Table row ${index} data:`, cellTexts);
+
+                    // Check if this row contains actual application data
+                    // Look for PAN number, application number, or other meaningful data
+                    const hasActualData = cellTexts.some(text =>
+                      text.length > 3 && // Not just empty or very short
+                      !text.toLowerCase().includes('select') &&
+                      !text.toLowerCase().includes('choose') &&
+                      (text.match(/[A-Z]{5}[0-9]{4}[A-Z]{1}/) || // PAN pattern
+                       text.match(/\d{6,}/) || // Application number pattern
+                       text.toLowerCase().includes('shares') ||
+                       text.toLowerCase().includes('amount'))
+                    );
+
+                    if (hasActualData) {
+                      foundActualData = true;
+
+                      // Now check for allotment status
+                      if (rowText.includes('allot') && !rowText.includes('not allot') && !rowText.includes('no allot')) {
+                        allotmentStatus = 'Allotted';
+                        allotmentDetails = {
+                          rawData: cellTexts,
+                          status: 'Allotted'
+                        };
+                      } else if (rowText.includes('not allot') || rowText.includes('no allot') || rowText.includes('rejected')) {
+                        allotmentStatus = 'Not Allotted';
+                        allotmentDetails = {
+                          rawData: cellTexts,
+                          status: 'Not Allotted'
+                        };
+                      } else {
+                        // Found data but unclear status
+                        allotmentStatus = 'Found Data - Check Raw';
+                        allotmentDetails = {
+                          rawData: cellTexts,
+                          status: 'Unknown'
+                        };
+                      }
+                    }
+                  }
+                });
+              }
+            });
+          }
+
+          // If no actual data found in tables, it's likely "No Record Found"
+          if (!foundActualData) {
+            allotmentStatus = 'No Record Found';
+            console.log('No actual application data found in tables');
+          }
+        }
+
+        return {
+          success: true,
+          registrar: 'skyline',
+          status: allotmentStatus,
+          allotmentDetails: allotmentDetails,
+          raw: resultHtml,
+          details: `Used company ID: ${companyId}, submitted form with PAN: ${panNo}`
+        };
+      }
+    }
+
+    // If no form found or form submission not needed, parse the current page
+    const pageText = $('body').text().toLowerCase();
+
+    console.log('No form found, analyzing page content...');
+    console.log('Page text sample:', pageText.substring(0, 500));
+
+    // Check for common "no data" indicators
+    if (pageText.includes('no record') ||
+        pageText.includes('not found') ||
+        pageText.includes('no data') ||
+        pageText.includes('no application') ||
+        pageText.includes('record not available')) {
+      allotmentStatus = 'No Record Found';
+    }
+    // Check if page contains actual application data
+    else {
+      const tables = $('table');
+      let hasApplicationData = false;
+
+      if (tables.length > 0) {
+        tables.each((_, table) => {
+          const $table = $(table);
+          const tableText = $table.text().toLowerCase();
+
+          // Look for signs of actual application data
+          if (tableText.includes('application') &&
+              (tableText.includes('number') || tableText.includes('pan') || tableText.includes('shares'))) {
+            hasApplicationData = true;
+          }
+        });
+      }
+
+      if (hasApplicationData) {
+        allotmentStatus = 'Check Raw Data - Manual Review Needed';
+      } else {
+        allotmentStatus = 'No Record Found';
+      }
+    }
+
+    return {
+      success: true,
+      registrar: 'skyline',
+      status: allotmentStatus,
+      raw: html,
+      details: `Used company ID: ${companyId}. ${panInputs.length > 0 ? 'Form found but submission may have failed.' : 'No form found on page.'}`
+    };
+
+  } catch (error: any) {
+    return {
+      success: false,
+      registrar: 'skyline',
+      raw: null,
+      status: 'error',
+      error: error.message
+    };
+  }
+}
+
 // Generic HTML-based checker for other registrars
 async function checkHtmlRegistrar(
   registrar: RegistrarType,
@@ -1361,7 +1727,7 @@ const registrarCheckers: Record<RegistrarType, (req: IPOAllotmentRequest) => Pro
   bigshare: checkBigshare,
   kfintech: checkKfintech,
   linkintime: checkLinkIntime,
-  skyline: (req) => checkHtmlRegistrar('skyline', req),
+  skyline: checkSkyline,
   cameo: checkCameo,
   mas: (req) => checkHtmlRegistrar('mas', req),
   maashitla: (req) => checkHtmlRegistrar('maashitla', req),
@@ -1497,6 +1863,32 @@ export class IPOAllotmentService {
 
     return {
       size: purvaCompanyIdCache.size,
+      entries
+    };
+  }
+
+  // Clear Skyline company ID cache
+  static clearSkylineCache(): void {
+    skylineCompanyIdCache.clear();
+    console.log('Skyline company ID cache cleared');
+  }
+
+  // Clean up expired Skyline cache entries
+  static cleanupSkylineCache(): void {
+    cleanupSkylineCache();
+    console.log('Skyline company ID cache cleaned up');
+  }
+
+  // Get Skyline cache stats
+  static getSkylineCache(): { size: number; entries: Array<{ ipoName: string; companyId: string | null; age: number }> } {
+    const entries = Array.from(skylineCompanyIdCache.entries()).map(([key, value]) => ({
+      ipoName: key,
+      companyId: value.id,
+      age: Date.now() - value.timestamp
+    }));
+
+    return {
+      size: skylineCompanyIdCache.size,
       entries
     };
   }
