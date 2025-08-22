@@ -39,10 +39,11 @@ const registrarConfigs: Record<RegistrarType, RegistrarConfig> = {
     responseType: 'json'
   },
   linkintime: {
-    name: 'Link Intime',
-    baseUrl: 'https://ipoallotment.linkintime.co.in',
+    name: 'Link Intime (now MUFG Intime India Private Limited)',
+    baseUrl: 'https://in.mpms.mufg.com',
     method: 'POST',
-    endpoint: '/public-issues/ipostatus',
+    endpoint: '/Initial_Offer/IPO.aspx/SearchOnPan',
+    requiresCompanyCode: true,
     responseType: 'json'
   },
   skyline: {
@@ -628,31 +629,131 @@ async function checkKfintech({ panNo, ipoName }: IPOAllotmentRequest): Promise<I
   }
 }
 
-// Link Intime checker
+// Link Intime checker - Now same as MUFG (Link Intime is now MUFG Intime India Private Limited)
 async function checkLinkIntime({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAllotmentResponse> {
-  const config = registrarConfigs.linkintime;
-  const url = `${config.baseUrl}${config.endpoint}`;
-  
-  const body = { pan: panNo, issueName: ipoName };
-
+  // Since Link Intime is now MUFG Intime India Private Limited, use MUFG logic
   try {
-    const response: AxiosResponse = await apiClient.post(url, body, {
-      headers: { 'Content-Type': 'application/json' }
+    console.log(`Checking Link Intime (MUFG) IPO allotment for PAN: ${panNo}, IPO: ${ipoName}`);
+
+    // Get company ID using the MUFG lookup function
+    let companyId = await getMufgCompanyId(ipoName);
+
+    // If no company ID found and ipoName is numeric, use it directly
+    if (!companyId && /^\d+$/.test(ipoName)) {
+      companyId = ipoName;
+      console.log(`Using provided numeric IPO name as company ID: ${companyId}`);
+    }
+
+    // If still no company ID found, return error
+    if (!companyId) {
+      return {
+        success: false,
+        registrar: 'linkintime',
+        raw: null,
+        status: 'error',
+        error: `No company found for IPO name: ${ipoName}`
+      };
+    }
+
+    // Use MUFG base URL since they are the same company now
+    const mufgBaseUrl = 'https://in.mpms.mufg.com';
+
+    // Generate token (simplified version)
+    const tokenUrl = `${mufgBaseUrl}/Initial_Offer/IPO.aspx/generateToken`;
+    let token = '';
+
+    try {
+      const tokenResponse = await apiClient.post(tokenUrl, {}, {
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
+      token = tokenResponse.data.d || '';
+    } catch (error) {
+      console.log('Could not generate token, proceeding without it');
+    }
+
+    // Search for allotment status using MUFG endpoint
+    const searchUrl = `${mufgBaseUrl}/Initial_Offer/IPO.aspx/SearchOnPan`;
+    const searchBody = {
+      clientid: companyId,
+      PAN: panNo,
+      IFSC: '',
+      CHKVAL: '1', // 1 for PAN search
+      token: token
+    };
+
+    const response = await apiClient.post(searchUrl, JSON.stringify(searchBody), {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
     });
 
     let parsed;
-    try { 
-      parsed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data; 
-    } catch { 
-      parsed = response.data; 
+    try {
+      parsed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+    } catch {
+      parsed = response.data;
     }
 
-    return { 
-      success: true, 
-      registrar: 'linkintime', 
-      raw: parsed, 
-      status: parsed?.status || 'check_raw' 
+    // Parse MUFG response to determine allotment status (same logic as MUFG)
+    let allotmentStatus = 'unknown';
+    let allotmentDetails = null;
+
+    if (parsed && parsed.d) {
+      const $ = cheerio.load(parsed.d);
+
+      // Look for application data in Table elements
+      const applications = $('Table');
+
+      if (applications.length > 0) {
+        // Take the first application result
+        const firstApp = applications.eq(0);
+        const allotted = firstApp.find('ALLOT').text();
+        const sharesApplied = firstApp.find('SHARES').text();
+        const applicantName = firstApp.find('NAME1').text();
+        const applicationCategory = firstApp.find('PEMNDG').text();
+        const dpClientId = firstApp.find('DPCLITID').text();
+
+        // Determine allotment status
+        if (allotted && parseInt(allotted) > 0) {
+          allotmentStatus = 'Allotted';
+        } else if (allotted === '0' || allotted === '') {
+          allotmentStatus = 'Not Allotted';
+        } else {
+          allotmentStatus = 'Pending';
+        }
+
+        allotmentDetails = {
+          applicationNumber: dpClientId || applicationCategory,
+          applicantName: applicantName,
+          dpId: dpClientId,
+          sharesApplied: sharesApplied,
+          allotmentStatus: allotted === '0' ? 'Not Allotted' : `${allotted} shares allotted`,
+          status: allotmentStatus as 'allotted' | 'not allotted' | 'no record found'
+        };
+      } else {
+        // Check for error messages in Table1
+        const errorMessages = $('Table1');
+        if (errorMessages.length > 0) {
+          const errorMsg = errorMessages.find('Msg').text();
+          if (errorMsg) {
+            allotmentStatus = 'No Record Found';
+          }
+        } else {
+          allotmentStatus = 'No Record Found';
+        }
+      }
+    }
+
+    return {
+      success: true,
+      registrar: 'linkintime',
+      status: allotmentStatus,
+      allotmentDetails: allotmentDetails || undefined,
+      raw: parsed,
+      details: companyId !== ipoName ? `Used company ID: ${companyId} (via MUFG system)` : 'Using MUFG system'
     };
+
   } catch (error: any) {
     return {
       success: false,
