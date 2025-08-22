@@ -33,9 +33,9 @@ const registrarConfigs: Record<RegistrarType, RegistrarConfig> = {
   },
   kfintech: {
     name: 'KFintech',
-    baseUrl: 'https://ris.kfintech.com',
-    method: 'POST',
-    endpoint: '/ipostatus/api/ipoapplicationstatus',
+    baseUrl: 'https://ipostatus.kfintech.com',
+    method: 'GET',
+    endpoint: '/api/query',
     responseType: 'json'
   },
   linkintime: {
@@ -534,37 +534,95 @@ async function checkBigshare({ panNo, ipoName }: IPOAllotmentRequest): Promise<I
   }
 }
 
-// KFintech checker
+// KFintech checker - Updated for new API endpoint
 async function checkKfintech({ panNo, ipoName }: IPOAllotmentRequest): Promise<IPOAllotmentResponse> {
-  const config = registrarConfigs.kfintech;
-  const url = `${config.baseUrl}${config.endpoint}`;
-  
-  const body = { PAN: panNo, IPOName: ipoName };
-
   try {
-    const response: AxiosResponse = await apiClient.post(url, body, {
-      headers: { 'Content-Type': 'application/json' }
+    console.log(`Checking KFintech IPO allotment for PAN: ${panNo}, IPO: ${ipoName}`);
+
+    // KFintech API endpoint discovered from browser network analysis
+    const apiUrl = 'https://0uz601ms56.execute-api.ap-south-1.amazonaws.com/prod/api/query';
+
+    const response = await apiClient.get(apiUrl, {
+      params: {
+        type: 'pan'
+      },
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'Origin': 'https://ipostatus.kfintech.com',
+        'Referer': 'https://ipostatus.kfintech.com/',
+        'client_id': '06917228970',
+        'reqparam': panNo,
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+      }
     });
 
-    let parsed;
-    try { 
-      parsed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data; 
-    } catch { 
-      parsed = response.data; 
+    console.log('KFintech API Response:', response.status, response.data);
+
+    // Parse the response
+    let allotmentStatus = 'No Record Found';
+    let allotmentDetails: any = undefined;
+
+    if (response.data && typeof response.data === 'object') {
+      // Check if there's allotment data
+      if (response.data.status === 'success' || response.data.data) {
+        const data = response.data.data || response.data;
+
+        // Check for allotment information
+        if (data.allotted && data.allotted > 0) {
+          allotmentStatus = 'Allotted';
+          allotmentDetails = {
+            sharesAllotted: data.allotted,
+            applicationNumber: data.applicationNumber || '',
+            applicantName: data.applicantName || '',
+            refundAmount: data.refundAmount || '0',
+            status: allotmentStatus
+          };
+        } else if (data.allotted === 0 || data.status === 'not_allotted') {
+          allotmentStatus = 'Not Allotted';
+          allotmentDetails = {
+            sharesAllotted: 0,
+            applicationNumber: data.applicationNumber || '',
+            applicantName: data.applicantName || '',
+            refundAmount: data.refundAmount || '0',
+            status: allotmentStatus
+          };
+        }
+      } else if (response.data.error) {
+        // Handle error responses
+        if (response.data.error.toLowerCase().includes('not found') ||
+            response.data.error.toLowerCase().includes('no record')) {
+          allotmentStatus = 'No Record Found';
+        }
+      }
     }
 
-    return { 
-      success: true, 
-      registrar: 'kfintech', 
-      raw: parsed, 
-      status: parsed?.status || 'check_raw' 
+    return {
+      success: true,
+      registrar: 'kfintech',
+      raw: response.data,
+      status: allotmentStatus,
+      details: allotmentDetails
     };
+
   } catch (error: any) {
+    console.error('KFintech API Error:', error.message);
+
+    // Handle specific error cases
+    if (error.response?.status === 404) {
+      return {
+        success: true,
+        registrar: 'kfintech',
+        raw: error.response.data,
+        status: 'No Record Found',
+        details: 'No IPO allotment record found for the provided PAN number.'
+      };
+    }
+
     return {
       success: false,
       registrar: 'kfintech',
       raw: null,
-      status: 'error',
+      status: 'Error',
       error: error.message
     };
   }
