@@ -5,6 +5,8 @@ import {
   getScreenerData,
   checkAllotmentStatus,
   getSupportedRegistrars,
+  getIpoDekhoListing,
+  getIpoDetails,
   healthCheck
 } from '../controllers/ipoController';
 
@@ -24,6 +26,12 @@ router.post('/check-allotment', checkAllotmentStatus);
 
 // GET /api/ipos/registrars - Get list of supported registrars
 router.get('/registrars', getSupportedRegistrars);
+
+// POST /api/ipos/ipodekho-listing - Get mainline IPO data from IPODekho
+router.post('/ipodekho-listing', getIpoDekhoListing);
+
+// GET /api/ipos/ipo-details/:slug - Get IPO details by slug from IPODekho
+router.get('/ipo-details/:slug', getIpoDetails);
 
 // GET /api/ipos/health - Health check for IPO service
 router.get('/health', healthCheck);

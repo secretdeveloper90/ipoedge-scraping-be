@@ -330,6 +330,123 @@ export const getSupportedRegistrars = (_req: Request, res: Response): void => {
   }
 };
 
+// Get mainline IPO data from IPODekho API
+export const getIpoDekhoListing = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { CategoryForIPOS, type } = req.body;
+
+    if (!CategoryForIPOS || !type) {
+      res.status(400).json({
+        error: 'Missing required parameters',
+        message: 'CategoryForIPOS and type are required in request body'
+      });
+      return;
+    }
+
+    console.log('Fetching mainline IPO data from IPODekho API', { CategoryForIPOS, type });
+
+    const payload = {
+      CategoryForIPOS,
+      type
+    };
+
+    const response: AxiosResponse = await apiClient.post('https://app.ipodekho.com/GetMainLineIpo', payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+
+    if (response.data) {
+      // Success response from IPODekho
+      res.json({
+        success: true,
+        data: response.data,
+        metadata: {
+          categoryForIPOS: CategoryForIPOS,
+          type: type,
+          fetchedAt: new Date().toISOString(),
+        }
+      });
+    } else {
+      // API returned unexpected data
+      res.status(404).json({
+        error: 'Mainline IPO data not found',
+        message: 'No mainline IPO data available',
+        details: response.data || {}
+      });
+    }
+  } catch (error: any) {
+    console.error('Error fetching mainline IPO data:', error.message);
+    res.status(500).json({
+      error: 'Failed to fetch mainline IPO data',
+      message: 'An error occurred while fetching mainline IPO data from IPODekho',
+      details: error.message
+    });
+  }
+};
+
+// Get IPO details by slug from IPODekho API
+export const getIpoDetails = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { slug } = req.params;
+
+    if (!slug) {
+      res.status(400).json({
+        error: 'Missing required parameter',
+        message: 'IPO slug is required in URL path'
+      });
+      return;
+    }
+
+    console.log('Fetching IPO details from IPODekho API for slug:', slug);
+
+    const response: AxiosResponse = await apiClient.post(`https://app.ipodekho.com/GetSlugByMainLineIpo/${slug}`, {}, {
+      headers: {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'content-length': '0',
+        'origin': 'https://ipodekho.com',
+        'referer': 'https://ipodekho.com/',
+        'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Linux"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
+      }
+    });
+
+    if (response.data) {
+      // Success response from IPODekho
+      res.json({
+        success: true,
+        data: response.data,
+        metadata: {
+          slug: slug,
+          fetchedAt: new Date().toISOString(),
+        }
+      });
+    } else {
+      // API returned unexpected data
+      res.status(404).json({
+        error: 'IPO details not found',
+        message: `No IPO details found for slug: ${slug}`,
+        details: response.data || {}
+      });
+    }
+  } catch (error: any) {
+    console.error('Error fetching IPO details:', error.message);
+    res.status(500).json({
+      error: 'Failed to fetch IPO details',
+      message: 'An error occurred while fetching IPO details from IPODekho',
+      details: error.message
+    });
+  }
+};
+
 // Health check endpoint
 export const healthCheck = (_req: Request, res: Response): void => {
   res.json({
@@ -342,6 +459,8 @@ export const healthCheck = (_req: Request, res: Response): void => {
       getScreenerData: '/api/ipos/screener/:year',
       checkAllotmentStatus: '/api/ipos/allotment-status',
       getSupportedRegistrars: '/api/ipos/registrars',
+      getIpoDekhoListing: '/api/ipos/ipodekho-listing',
+      getIpoDetails: '/api/ipos/ipo-details/:slug',
       health: '/api/ipos/health'
     }
   });
