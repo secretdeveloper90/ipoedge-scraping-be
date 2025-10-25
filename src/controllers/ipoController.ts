@@ -447,6 +447,42 @@ export const getIpoDetails = async (req: Request, res: Response): Promise<void> 
   }
 };
 
+// Get alloted IPOs from IPOWiz API
+export const getAllotedIPOs = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    console.log('Fetching alloted IPOs from IPOWiz API');
+
+    const response: AxiosResponse = await apiClient.get('https://backend.ipowiz.com/api/ipo/allotedIPOs');
+
+    if (response.data && response.data.status === 'success') {
+      // Success response from IPOWiz
+      res.json({
+        success: true,
+        data: response.data.data,
+        message: response.data.message,
+        metadata: {
+          fetchedAt: new Date().toISOString(),
+          totalCount: response.data.data?.length || 0
+        }
+      });
+    } else {
+      // API returned an error
+      res.status(404).json({
+        error: 'Alloted IPOs data not found',
+        message: 'No alloted IPOs data available',
+        details: response.data || {}
+      });
+    }
+  } catch (error: any) {
+    console.error('Error fetching alloted IPOs:', error.message);
+    res.status(500).json({
+      error: 'Failed to fetch alloted IPOs',
+      message: 'An error occurred while fetching alloted IPOs data',
+      details: error.message
+    });
+  }
+};
+
 // Health check endpoint
 export const healthCheck = (_req: Request, res: Response): void => {
   res.json({
@@ -461,6 +497,7 @@ export const healthCheck = (_req: Request, res: Response): void => {
       getSupportedRegistrars: '/api/ipos/registrars',
       getIpoDekhoListing: '/api/ipos/ipodekho-listing',
       getIpoDetails: '/api/ipos/ipo-details/:slug',
+      getAllotedIPOs: '/api/ipos/allotedipo-list',
       health: '/api/ipos/health'
     }
   });

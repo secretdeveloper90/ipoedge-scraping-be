@@ -7,6 +7,7 @@ import {
   getSupportedRegistrars,
   getIpoDekhoListing,
   getIpoDetails,
+  getAllotedIPOs,
   healthCheck
 } from '../controllers/ipoController';
 
@@ -32,6 +33,9 @@ router.post('/ipodekho-listing', getIpoDekhoListing);
 
 // GET /api/ipos/ipo-details/:slug - Get IPO details by slug from IPODekho
 router.get('/ipo-details/:slug', getIpoDetails);
+
+// GET /api/ipos/allotedipo-list - Get list of alloted IPOs from IPOWiz
+router.get('/allotedipo-list', getAllotedIPOs);
 
 // GET /api/ipos/health - Health check for IPO service
 router.get('/health', healthCheck);
