@@ -8,6 +8,7 @@ import {
   getIpoDekhoListing,
   getIpoDetails,
   getAllotedIPOs,
+  checkAllotmentWithIPONinja,
   healthCheck
 } from '../controllers/ipoController';
 
@@ -36,6 +37,9 @@ router.get('/ipo-details/:slug', getIpoDetails);
 
 // GET /api/ipos/allotedipo-list - Get list of alloted IPOs from IPOWiz
 router.get('/allotedipo-list', getAllotedIPOs);
+
+// POST /api/ipos/check-ipoallotment - Check IPO allotment status using IPONinja API
+router.post('/check-ipoallotment', checkAllotmentWithIPONinja);
 
 // GET /api/ipos/health - Health check for IPO service
 router.get('/health', healthCheck);
