@@ -245,8 +245,6 @@ export const getScreenerData = async (
   }
 };
 
-
-
 // Get mainline IPO data from IPODekho API
 export const getIpoDekhoListing = async (
   req: Request,
@@ -517,7 +515,6 @@ export const getSubscriptionList = async (
       data: response.data,
       metadata: {
         fetchedAt: new Date().toISOString(),
-        source: "ipo-trend",
         platform,
       },
     });
@@ -550,7 +547,6 @@ export const getBannerList = async (
       data: response.data,
       metadata: {
         fetchedAt: new Date().toISOString(),
-        source: "ipo-trend",
         platform,
       },
     });
@@ -583,7 +579,6 @@ export const getIpoList = async (
       data: response.data,
       metadata: {
         fetchedAt: new Date().toISOString(),
-        source: "ipo-trend",
         platform,
       },
     });
@@ -625,7 +620,6 @@ export const getGmpDetails = async (
       data: response.data,
       metadata: {
         fetchedAt: new Date().toISOString(),
-        source: "ipo-trend",
         ipoName,
         platform,
       },
@@ -668,7 +662,6 @@ export const getIpoDetailsBySymbol = async (
       data: response.data,
       metadata: {
         fetchedAt: new Date().toISOString(),
-        source: "ipo-trend",
         symbol,
         platform,
       },
