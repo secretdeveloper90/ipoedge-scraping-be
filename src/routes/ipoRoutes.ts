@@ -50,10 +50,10 @@ router.get('/ipo-list', getIpoList);
 // GET /api/ipos/gmp-detail/:ipoName - Get GMP details for a specific IPO from IPO Trend
 router.get('/gmp-detail/:ipoName', getGmpDetails);
 
+// GET /api/ipos/ipo-symbol/:symbol - Get IPO details by symbol from IPO Trend
+router.get('/ipo-symbol/:symbol', getIpoDetailsBySymbol);
+
 // GET /api/ipos/health - Health check for IPO service
 router.get('/health', healthCheck);
-
-// GET /api/ipos/:symbol - Get IPO details by symbol from IPO Trend (must be last to avoid conflicts)
-router.get('/:symbol', getIpoDetailsBySymbol);
 
 export default router;

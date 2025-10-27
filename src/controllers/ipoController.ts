@@ -693,7 +693,7 @@ export const healthCheck = (_req: Request, res: Response): void => {
       getBannerList: "/api/ipos/banner-list",
       getIpoList: "/api/ipos/ipo-list",
       getGmpDetails: "/api/ipos/gmp-detail/:ipoName",
-      getIpoDetailsBySymbol: "/api/ipos/:symbol",
+      getIpoDetailsBySymbol: "/api/ipos/ipo-symbol/:symbol",
       health: "/api/ipos/health",
     },
   });
