@@ -497,11 +497,11 @@ export const checkAllotmentWithIPONinja = async (
 
 // Get IPO subscription list from IPO Trend API
 export const getSubscriptionList = async (
-  req: Request,
+  _req: Request,
   res: Response
 ): Promise<void> => {
   try {
-    const platform = req.query.platform || "Android";
+    const platform = "Android";
 
     const response: AxiosResponse = await apiClient.get(
       `${IPO_TREND_BASE_URL}/ipo-subscription-list/`,
@@ -529,11 +529,11 @@ export const getSubscriptionList = async (
 
 // Get banner IPO list from IPO Trend API
 export const getBannerList = async (
-  req: Request,
+  _req: Request,
   res: Response
 ): Promise<void> => {
   try {
-    const platform = req.query.platform || "Android";
+    const platform = "Android";
 
     const response: AxiosResponse = await apiClient.get(
       `${IPO_TREND_BASE_URL}/banner-ipo-list`,
@@ -561,11 +561,11 @@ export const getBannerList = async (
 
 // Get list of IPOs from IPO Trend API
 export const getIpoList = async (
-  req: Request,
+  _req: Request,
   res: Response
 ): Promise<void> => {
   try {
-    const platform = req.query.platform || "Android";
+    const platform = "Android";
 
     const response: AxiosResponse = await apiClient.get(
       `${IPO_TREND_BASE_URL}/list-of-ipo`,
@@ -598,7 +598,7 @@ export const getGmpDetails = async (
 ): Promise<void> => {
   try {
     const { ipoName } = req.params;
-    const platform = req.query.platform || "Android";
+    const platform = "Android";
 
     if (!ipoName) {
       res.status(400).json({
@@ -640,7 +640,7 @@ export const getIpoDetailsBySymbol = async (
 ): Promise<void> => {
   try {
     const { symbol } = req.params;
-    const platform = req.query.platform || "Android";
+    const platform = "Android";
 
     if (!symbol) {
       res.status(400).json({
