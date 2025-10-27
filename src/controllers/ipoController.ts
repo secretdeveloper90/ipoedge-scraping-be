@@ -1,10 +1,11 @@
 import { Request, Response } from "express";
 import axios, { AxiosInstance, AxiosResponse } from "axios";
-import { IPOAllotmentService } from "../services/ipoAllotmentService";
-import { IPOAllotmentRequest, RegistrarType } from "../types/ipoAllotment";
 
 const TRENDLYNE_BASE_URL: string =
   process.env.TRENDLYNE_BASE_URL || "https://trendlyne.com/ipo/api";
+
+const IPO_TREND_BASE_URL: string =
+  process.env.IPO_TREND_BASE_URL || "https://api.ipo-trend.com/ipo";
 
 // Define interfaces for API responses
 
@@ -244,124 +245,7 @@ export const getScreenerData = async (
   }
 };
 
-// Check IPO allotment status
-export const checkAllotmentStatus = async (
-  req: Request,
-  res: Response
-): Promise<void> => {
-  try {
-    const { panNo, ipoName, registrar }: IPOAllotmentRequest = req.body;
 
-    // Validate required fields
-    if (!panNo || !ipoName) {
-      res.status(400).json({
-        success: false,
-        error: "Missing required fields",
-        message: "panNo and ipoName are required",
-      });
-      return;
-    }
-
-    // Validate PAN format (basic validation)
-    const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
-    if (!panRegex.test(panNo)) {
-      res.status(400).json({
-        success: false,
-        error: "Invalid PAN format",
-        message: "PAN should be in format: ABCDE1234F",
-      });
-      return;
-    }
-
-    if (registrar) {
-      // Check specific registrar
-      const validRegistrars: RegistrarType[] = [
-        "bigshare",
-        "kfintech",
-        "linkintime",
-        "skyline",
-        "cameo",
-        "mas",
-        "maashitla",
-        "beetal",
-        "purva",
-        "mufg",
-      ];
-
-      if (!validRegistrars.includes(registrar as RegistrarType)) {
-        res.status(400).json({
-          success: false,
-          error: "Invalid registrar",
-          message: `Registrar must be one of: ${validRegistrars.join(", ")}`,
-        });
-        return;
-      }
-
-      const result = await IPOAllotmentService.checkRegistrar(
-        registrar as RegistrarType,
-        { panNo, ipoName, registrar }
-      );
-
-      res.json({
-        success: true,
-        data: result,
-        metadata: {
-          panNo: panNo.substring(0, 3) + "XXXXX" + panNo.substring(8), // Mask PAN for privacy
-          ipoName,
-          registrar,
-          checkedAt: new Date().toISOString(),
-        },
-      });
-    } else {
-      // Check all registrars
-      const results = await IPOAllotmentService.checkAllRegistrars({
-        panNo,
-        ipoName,
-      });
-
-      res.json({
-        success: true,
-        data: results,
-        metadata: {
-          panNo: panNo.substring(0, 3) + "XXXXX" + panNo.substring(8), // Mask PAN for privacy
-          ipoName,
-          totalRegistrarsChecked: results.length,
-          checkedAt: new Date().toISOString(),
-        },
-      });
-    }
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: "Failed to check allotment status",
-      message: "An error occurred while checking IPO allotment status",
-      details: error.message,
-    });
-  }
-};
-
-// Get supported registrars list
-export const getSupportedRegistrars = (_req: Request, res: Response): void => {
-  try {
-    const registrars = IPOAllotmentService.getSupportedRegistrars();
-
-    res.json({
-      success: true,
-      data: registrars,
-      metadata: {
-        totalRegistrars: registrars.length,
-        fetchedAt: new Date().toISOString(),
-      },
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch supported registrars",
-      message: "An error occurred while fetching registrar information",
-      details: error.message,
-    });
-  }
-};
 
 // Get mainline IPO data from IPODekho API
 export const getIpoDekhoListing = async (
@@ -613,6 +497,191 @@ export const checkAllotmentWithIPONinja = async (
   }
 };
 
+// Get IPO subscription list from IPO Trend API
+export const getSubscriptionList = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const platform = req.query.platform || "Android";
+
+    const response: AxiosResponse = await apiClient.get(
+      `${IPO_TREND_BASE_URL}/ipo-subscription-list/`,
+      {
+        params: { platform },
+      }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      metadata: {
+        fetchedAt: new Date().toISOString(),
+        source: "ipo-trend",
+        platform,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to fetch subscription list",
+      message: "An error occurred while fetching IPO subscription list",
+      details: error.message,
+    });
+  }
+};
+
+// Get banner IPO list from IPO Trend API
+export const getBannerList = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const platform = req.query.platform || "Android";
+
+    const response: AxiosResponse = await apiClient.get(
+      `${IPO_TREND_BASE_URL}/banner-ipo-list`,
+      {
+        params: { platform },
+      }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      metadata: {
+        fetchedAt: new Date().toISOString(),
+        source: "ipo-trend",
+        platform,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to fetch banner list",
+      message: "An error occurred while fetching banner IPO list",
+      details: error.message,
+    });
+  }
+};
+
+// Get list of IPOs from IPO Trend API
+export const getIpoList = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const platform = req.query.platform || "Android";
+
+    const response: AxiosResponse = await apiClient.get(
+      `${IPO_TREND_BASE_URL}/list-of-ipo`,
+      {
+        params: { platform },
+      }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      metadata: {
+        fetchedAt: new Date().toISOString(),
+        source: "ipo-trend",
+        platform,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to fetch IPO list",
+      message: "An error occurred while fetching list of IPOs",
+      details: error.message,
+    });
+  }
+};
+
+// Get GMP details for a specific IPO from IPO Trend API
+export const getGmpDetails = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const { ipoName } = req.params;
+    const platform = req.query.platform || "Android";
+
+    if (!ipoName) {
+      res.status(400).json({
+        error: "Missing required parameter",
+        message: "ipoName is required in the URL path",
+      });
+      return;
+    }
+
+    const response: AxiosResponse = await apiClient.get(
+      `${IPO_TREND_BASE_URL}/ipo-gmp-detail/${ipoName}/`,
+      {
+        params: { platform },
+      }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      metadata: {
+        fetchedAt: new Date().toISOString(),
+        source: "ipo-trend",
+        ipoName,
+        platform,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to fetch GMP details",
+      message: "An error occurred while fetching IPO GMP details",
+      details: error.message,
+    });
+  }
+};
+
+// Get IPO details by symbol from IPO Trend API
+export const getIpoDetailsBySymbol = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const { symbol } = req.params;
+    const platform = req.query.platform || "Android";
+
+    if (!symbol) {
+      res.status(400).json({
+        error: "Missing required parameter",
+        message: "symbol is required in the URL path",
+      });
+      return;
+    }
+
+    const response: AxiosResponse = await apiClient.get(
+      `${IPO_TREND_BASE_URL}/${symbol}/`,
+      {
+        params: { platform },
+      }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      metadata: {
+        fetchedAt: new Date().toISOString(),
+        source: "ipo-trend",
+        symbol,
+        platform,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to fetch IPO details",
+      message: "An error occurred while fetching IPO details by symbol",
+      details: error.message,
+    });
+  }
+};
+
 // Health check endpoint
 export const healthCheck = (_req: Request, res: Response): void => {
   res.json({
@@ -623,12 +692,15 @@ export const healthCheck = (_req: Request, res: Response): void => {
       getListingDetails: "/api/ipos/listing-details",
       getCompanyDetails: "/api/ipos/company/:companyId",
       getScreenerData: "/api/ipos/screener/:year",
-      checkAllotmentStatus: "/api/ipos/check-allotment",
-      getSupportedRegistrars: "/api/ipos/registrars",
       getIpoDekhoListing: "/api/ipos/ipodekho-listing",
       getIpoDetails: "/api/ipos/ipo-details/:slug",
       getAllotedIPOs: "/api/ipos/allotedipo-list",
       checkAllotmentWithIPONinja: "/api/ipos/check-ipoallotment",
+      getSubscriptionList: "/api/ipos/subscription-list",
+      getBannerList: "/api/ipos/banner-list",
+      getIpoList: "/api/ipos/ipo-list",
+      getGmpDetails: "/api/ipos/gmp-detail/:ipoName",
+      getIpoDetailsBySymbol: "/api/ipos/:symbol",
       health: "/api/ipos/health",
     },
   });
