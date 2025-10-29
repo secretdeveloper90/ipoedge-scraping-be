@@ -489,7 +489,8 @@ export const checkAllotmentWithIPONinja = async (
     res.status(500).json({
       success: false,
       error: "Failed to check allotment status",
-      message: "An error occurred while checking IPO allotment status via IPONinja API",
+      message:
+        "An error occurred while checking IPO allotment status via IPONinja API",
       details: error.message,
     });
   }
@@ -586,6 +587,66 @@ export const getIpoList = async (
     res.status(500).json({
       error: "Failed to fetch IPO list",
       message: "An error occurred while fetching list of IPOs",
+      details: error.message,
+    });
+  }
+};
+
+// Get new IPO list from IPO Trend API with dynamic parameters
+export const getNewIpoList = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    // Extract parameters from request query - all dynamic
+    const { ipo_type, category, page_size, page, search } = req.query;
+
+    // Build query string manually to ensure proper encoding
+    const queryParams = new URLSearchParams();
+
+    // Platform is required for decoding the response
+    queryParams.append("platform", "Android");
+
+    // Add dynamic parameters only if provided
+    if (ipo_type) {
+      queryParams.append("ipo_type", ipo_type as string);
+    }
+    if (category) {
+      queryParams.append("category", category as string);
+    }
+    if (page_size) {
+      queryParams.append("page_size", page_size as string);
+    }
+    if (page) {
+      queryParams.append("page", page as string);
+    }
+    if (search !== undefined) {
+      queryParams.append("search", search as string);
+    }
+
+    const response: AxiosResponse = await apiClient.post(
+      `${IPO_TREND_BASE_URL}/new-ipo-list?${queryParams.toString()}`,
+      {},
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+      }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      metadata: {
+        fetchedAt: new Date().toISOString(),
+        queryParams: Object.fromEntries(queryParams.entries()),
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to fetch new IPO list",
+      message: "An error occurred while fetching new IPO list",
       details: error.message,
     });
   }
@@ -692,6 +753,7 @@ export const healthCheck = (_req: Request, res: Response): void => {
       getSubscriptionList: "/api/ipos/subscription-list",
       getBannerList: "/api/ipos/banner-list",
       getIpoList: "/api/ipos/ipo-list",
+      getNewIpoList: "/api/ipos/new-ipo-list",
       getGmpDetails: "/api/ipos/gmp-detail/:ipoName",
       getIpoDetailsBySymbol: "/api/ipos/ipo-symbol/:symbol",
       health: "/api/ipos/health",

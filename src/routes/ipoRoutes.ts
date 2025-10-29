@@ -10,6 +10,7 @@ import {
   getSubscriptionList,
   getBannerList,
   getIpoList,
+  getNewIpoList,
   getGmpDetails,
   getIpoDetailsBySymbol,
   healthCheck
@@ -46,6 +47,9 @@ router.get('/banner-list', getBannerList);
 
 // GET /api/ipos/ipo-list - Get list of IPOs from IPO Trend
 router.get('/ipo-list', getIpoList);
+
+// GET /api/ipos/new-ipo-list - Get new IPO list from IPO Trend with dynamic query parameters
+router.get('/new-ipo-list', getNewIpoList);
 
 // GET /api/ipos/gmp-detail/:ipoName - Get GMP details for a specific IPO from IPO Trend
 router.get('/gmp-detail/:ipoName', getGmpDetails);
